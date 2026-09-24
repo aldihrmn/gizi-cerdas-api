@@ -26,18 +26,54 @@ class Child extends Model
         'height' => 'decimal:2',
     ];
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | Relasi ke User / Orang Tua
+    |--------------------------------------------------------------------------
+    */
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
     }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Relasi ke Perhitungan Nutrisi
+    |--------------------------------------------------------------------------
+    */
 
     public function nutritionCalculations(): HasMany
     {
         return $this->hasMany(NutritionCalculation::class);
     }
 
+
+    /*
+    |--------------------------------------------------------------------------
+    | Relasi ke Data Pertumbuhan
+    |--------------------------------------------------------------------------
+    */
+
     public function growthRecords(): HasMany
     {
         return $this->hasMany(GrowthRecord::class);
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Relasi ke Catatan Admin
+    |--------------------------------------------------------------------------
+    */
+
+    public function adminNotes(): HasMany
+    {
+        return $this->hasMany(
+            AdminNote::class,
+            'child_id'
+        );
     }
 }

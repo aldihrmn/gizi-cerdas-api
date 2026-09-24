@@ -10,12 +10,21 @@ return new class extends Migration
     {
         Schema::create('children', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+
+            $table->foreignId('user_id')
+                ->constrained()
+                ->onDelete('cascade');
+
             $table->string('name');
+
             $table->date('birth_date');
-            $table->enum('gender', ['male', 'female']);
-            $table->decimal('weight', 5, 2);
-            $table->decimal('height', 5, 2);
+
+            $table->string('gender', 20);
+
+            $table->decimal('weight', 5, 2)->nullable();
+
+            $table->decimal('height', 5, 2)->nullable();
+
             $table->timestamps();
         });
     }
