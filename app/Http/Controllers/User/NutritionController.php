@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Auth;
 
 class NutritionController extends Controller
 {
-    /**
-     * Menampilkan halaman form perhitungan nutrisi.
-     */
     public function create()
     {
         $children = Child::where('user_id', Auth::id())
@@ -24,9 +21,6 @@ class NutritionController extends Controller
         return view('user.nutrition.create', compact('children'));
     }
 
-    /**
-     * Menyimpan hasil perhitungan nutrisi.
-     */
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -34,7 +28,6 @@ class NutritionController extends Controller
             'calculation_date' => 'required|date',
         ]);
 
-        // Pastikan anak milik user yang sedang login.
         $child = Child::where('id', $validated['child_id'])
             ->where('user_id', Auth::id())
             ->firstOrFail();
@@ -47,7 +40,6 @@ class NutritionController extends Controller
             $child->birth_date
         );
 
-        // Tanggal pemeriksaan tidak boleh sebelum tanggal lahir.
         if ($calculationDate->lt($birthDate)) {
             return back()
                 ->withErrors([
@@ -57,12 +49,10 @@ class NutritionController extends Controller
                 ->withInput();
         }
 
-        // Hitung umur dalam bulan penuh.
         $ageInMonths = (int) floor(
             $birthDate->diffInMonths($calculationDate)
         );
 
-        // Maksimal 18 tahun.
         if ($ageInMonths > 216) {
             return back()
                 ->withErrors([
@@ -72,43 +62,94 @@ class NutritionController extends Controller
                 ->withInput();
         }
 
-        // Hitung seluruh data nutrisi.
         $result = $this->calculateNutrition(
             $child,
             $calculationDate,
             $ageInMonths
         );
 
-        // Simpan hasil ke database.
-        $calculation = NutritionCalculation::create([
+        $calculation = new NutritionCalculation();
+
+        $calculation->forceFill([
             'child_id' => $child->id,
-            'calculation_date' => $calculationDate->toDateString(),
 
-            'age_in_months' => $ageInMonths,
-            'weight' => $child->weight,
-            'height' => $child->height,
-            'bmi' => $result['bmi'],
+            'calculation_date' =>
+                $calculationDate->toDateString(),
 
-            'ideal_weight' => $result['ideal_weight'],
-            'height_age_months' => $result['height_age_months'],
-            'energy_per_kg' => $result['energy_per_kg'],
-            'energy_requirement' => $result['energy_requirement'],
+            'age' =>
+                $ageInMonths,
 
-            'solid_percentage' => $result['solid_percentage'],
-            'liquid_percentage' => $result['liquid_percentage'],
-            'solid_energy' => $result['solid_energy'],
-            'liquid_energy' => $result['liquid_energy'],
-            'liquid_ml' => $result['liquid_ml'],
+            'age_in_months' =>
+                $ageInMonths,
 
-            'protein_requirement' => $result['protein_requirement'],
-            'fat_requirement' => $result['fat_requirement'],
-            'carbohydrate_requirement' => $result['carbohydrate_requirement'],
+            'weight' =>
+                $child->weight,
 
-            'food_quantitative' => $result['food_quantitative'],
+            'height' =>
+                $child->height,
 
-            'nutrition_status' => $result['nutrition_status'],
-            'recommendation' => $result['recommendation'],
+            'bmi' =>
+                $result['bmi'],
+
+            'ideal_weight' =>
+                $result['ideal_weight'],
+
+            'height_age_months' =>
+                $result['height_age_months'],
+
+            'energy_per_kg' =>
+                $result['energy_per_kg'],
+
+            'energy_requirement' =>
+                $result['energy_requirement'],
+
+            'solid_percentage' =>
+                $result['solid_percentage'],
+
+            'liquid_percentage' =>
+                $result['liquid_percentage'],
+
+            'solid_energy' =>
+                $result['solid_energy'],
+
+            'liquid_energy' =>
+                $result['liquid_energy'],
+
+            'liquid_ml' =>
+                $result['liquid_ml'],
+
+            'protein_requirement' =>
+                $result['protein_requirement'],
+
+            'fat_requirement' =>
+                $result['fat_requirement'],
+
+            'carbohydrate_requirement' =>
+                $result['carbohydrate_requirement'],
+
+            'food_quantitative' =>
+                $result['food_quantitative'],
+
+            'nutrition_status' =>
+                $result['nutrition_status'],
+
+            'recommendation' =>
+                $result['recommendation'],
+
+            'energy' =>
+                $result['energy_requirement'] ?? 0,
+
+            'protein' =>
+                $result['protein_requirement'] ?? 0,
+
+            'fat' =>
+                $result['fat_requirement'] ?? 0,
+
+            'carbohydrate' =>
+                $result['carbohydrate_requirement'] ?? 0,
         ]);
+
+        $calculation->save();
 
         return view('user.nutrition.result', [
             'calculation' => $calculation,
@@ -118,9 +159,6 @@ class NutritionController extends Controller
         ]);
     }
 
-    /**
-     * Menghitung semua data nutrisi.
-     */
     private function calculateNutrition(
         Child $child,
         Carbon $calculationDate,
@@ -133,26 +171,44 @@ class NutritionController extends Controller
         $weight = (float) $child->weight;
         $height = (float) $child->height;
 
-        // Hitung BMI.
+        /*
+         * Metode pengukuran:
+         * recumbent = terlentang
+         * standing  = berdiri
+         */
+        $measurementMethod =
+            $child->measurement_method ?? 'standing';
+
+        /*
+         * Tinggi/panjang yang digunakan
+         * untuk penilaian antropometri.
+         *
+         * Aturan:
+         * 0-24 bulan:
+         * - terlentang = tetap
+         * - berdiri = +0.7 cm
+         *
+         * >24 bulan:
+         * - berdiri = tetap
+         * - terlentang = -0.7 cm
+         */
+        $heightForAssessment =
+            $this->adjustHeight(
+                $height,
+                $ageInMonths,
+                $measurementMethod
+            );
+
+        /*
+         * BMI / IMT
+         */
         $bmi = $this->calculateBmi(
             $weight,
-            $height
+            $heightForAssessment
         );
 
         /*
-         * =====================================================
-         * STATUS GIZI
-         * =====================================================
-         *
-         * Empat indikator:
-         *
-         * 1. BB/U
-         * 2. TB/U
-         * 3. BB/TB
-         * 4. IMT/U
-         *
-         * Semua key dibuat dari awal supaya Blade selalu
-         * mempunyai tempat untuk menampilkan keempat indikator.
+         * Status gizi
          */
         $statuses = [
             'BB/U' => null,
@@ -164,11 +220,10 @@ class NutritionController extends Controller
         $zScores = [];
 
         /*
-         * =====================================================
-         * 1. BB/U
-         * =====================================================
+         * BB/U
          *
-         * Standar WFA tersedia sampai 60 bulan.
+         * Tidak menggunakan tinggi badan.
+         * Hanya berat badan dan umur.
          */
         if ($ageInMonths <= 60) {
             $wfa = GrowthStandard::where(
@@ -182,7 +237,6 @@ class NutritionController extends Controller
             if ($wfa) {
                 $z = $this->calculateZScore(
                     $weight,
-                    $wfa->median,
                     $wfa
                 );
 
@@ -194,16 +248,17 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * 2. TB/U
-         * =====================================================
+         * TB/U atau PB/U
          *
-         * 0–23 bulan  = LFA
-         * 24–60 bulan = HFA
+         * 0-24 bulan  -> LFA
+         * >24-60 bulan -> HFA
+         *
+         * Tinggi/panjang sudah dikoreksi
+         * berdasarkan metode pengukuran.
          */
         $heightStandard = null;
 
-        if ($ageInMonths <= 23) {
+        if ($ageInMonths <= 24) {
             $heightStandard = GrowthStandard::where(
                 'index_type',
                 'lfa'
@@ -223,8 +278,7 @@ class NutritionController extends Controller
 
         if ($heightStandard) {
             $z = $this->calculateZScore(
-                $height,
-                $heightStandard->median,
+                $heightForAssessment,
                 $heightStandard
             );
 
@@ -235,11 +289,10 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * 3. BB/TB
-         * =====================================================
+         * BB/TB atau BB/PB
          *
-         * WFH memakai measurement_value sebagai tinggi.
+         * Tinggi/panjang yang digunakan
+         * adalah tinggi yang sudah dikoreksi.
          */
         $wfhStandard = GrowthStandard::where(
             'index_type',
@@ -249,14 +302,13 @@ class NutritionController extends Controller
             ->whereNotNull('measurement_value')
             ->orderByRaw(
                 'ABS(measurement_value - ?)',
-                [$height]
+                [$heightForAssessment]
             )
             ->first();
 
         if ($wfhStandard) {
             $z = $this->calculateZScore(
                 $weight,
-                $wfhStandard->median,
                 $wfhStandard
             );
 
@@ -267,11 +319,10 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * 4. IMT/U
-         * =====================================================
+         * IMT/U
          *
-         * BMI menurut umur 0–18 tahun.
+         * BMI menggunakan tinggi/panjang
+         * yang sudah dikoreksi.
          */
         $bmiStandard = GrowthStandard::where(
             'index_type',
@@ -284,7 +335,6 @@ class NutritionController extends Controller
         if ($bmiStandard) {
             $z = $this->calculateZScore(
                 $bmi,
-                $bmiStandard->median,
                 $bmiStandard
             );
 
@@ -300,12 +350,7 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * NUTRITION STATUS
-         * =====================================================
-         *
-         * Hanya indikator yang benar-benar tersedia
-         * yang dimasukkan ke string database.
+         * Gabungkan status gizi
          */
         $nutritionStatusParts = [];
 
@@ -317,34 +362,30 @@ class NutritionController extends Controller
         }
 
         if (!empty($nutritionStatusParts)) {
-            $nutritionStatus = implode(
-                ' | ',
-                $nutritionStatusParts
-            );
+            $nutritionStatus =
+                implode(
+                    ' | ',
+                    $nutritionStatusParts
+                );
         } else {
             $nutritionStatus =
                 'Data status gizi belum tersedia';
         }
 
         /*
-         * =====================================================
-         * HEIGHT AGE
-         * =====================================================
+         * Height age
          */
         $heightAgeMonths =
             $this->findHeightAge(
                 $gender,
-                $height
+                $heightForAssessment
             );
 
         /*
-         * =====================================================
-         * BB IDEAL
-         * =====================================================
+         * Berat badan ideal
          */
         $idealWeight = null;
 
-        // Gunakan WFA berdasarkan Height Age jika tersedia.
         if (
             $ageInMonths <= 60 &&
             $heightAgeMonths !== null
@@ -367,7 +408,9 @@ class NutritionController extends Controller
             }
         }
 
-        // Fallback menggunakan WFH.
+        /*
+         * Fallback menggunakan BB/TB
+         */
         if ($idealWeight === null) {
             $idealWeightStandard =
                 GrowthStandard::where(
@@ -378,7 +421,7 @@ class NutritionController extends Controller
                     ->whereNotNull('measurement_value')
                     ->orderByRaw(
                         'ABS(measurement_value - ?)',
-                        [$height]
+                        [$heightForAssessment]
                     )
                     ->first();
 
@@ -388,16 +431,13 @@ class NutritionController extends Controller
             }
         }
 
-        // Berat yang dipakai untuk perhitungan energi.
         $energyWeight =
             $idealWeight !== null
                 ? $idealWeight
                 : $weight;
 
         /*
-         * =====================================================
-         * KEBUTUHAN ENERGI
-         * =====================================================
+         * Kebutuhan energi
          */
         $energyPerKg =
             $this->getEnergyPerKg(
@@ -410,15 +450,13 @@ class NutritionController extends Controller
         if ($energyPerKg !== null) {
             $energyRequirement = round(
                 $energyWeight *
-                $energyPerKg,
+                    $energyPerKg,
                 2
             );
         }
 
         /*
-         * =====================================================
-         * FOOD QUANTITATIVE
-         * =====================================================
+         * Pembagian makanan
          */
         $solidPercentage = 0;
         $liquidPercentage = 0;
@@ -444,13 +482,13 @@ class NutritionController extends Controller
         if ($energyRequirement !== null) {
             $solidEnergy = round(
                 $energyRequirement *
-                ($solidPercentage / 100),
+                    ($solidPercentage / 100),
                 2
             );
 
             $liquidEnergy = round(
                 $energyRequirement *
-                ($liquidPercentage / 100),
+                    ($liquidPercentage / 100),
                 2
             );
 
@@ -463,9 +501,7 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * ZAT GIZI MAKRO
-         * =====================================================
+         * Zat gizi makro
          */
         $proteinRequirement = null;
         $fatRequirement = null;
@@ -498,14 +534,13 @@ class NutritionController extends Controller
         }
 
         /*
-         * =====================================================
-         * DETAIL FOOD QUANTITATIVE
-         * =====================================================
+         * Food quantitative
          */
         $foodQuantitative = [
             'solid_food' => [
                 'percentage' =>
                     $solidPercentage,
+
                 'energy_kcal' =>
                     $solidEnergy,
             ],
@@ -513,10 +548,13 @@ class NutritionController extends Controller
             'liquid_food' => [
                 'percentage' =>
                     $liquidPercentage,
+
                 'energy_kcal' =>
                     $liquidEnergy,
+
                 'volume_ml' =>
                     $liquidMl,
+
                 'energy_density_kcal_per_ml' =>
                     0.67,
             ],
@@ -528,9 +566,7 @@ class NutritionController extends Controller
         ];
 
         /*
-         * =====================================================
-         * REKOMENDASI
-         * =====================================================
+         * Rekomendasi
          */
         $recommendation =
             $this->makeRecommendation(
@@ -540,11 +576,6 @@ class NutritionController extends Controller
                 $energyRequirement
             );
 
-        /*
-         * =====================================================
-         * HASIL AKHIR
-         * =====================================================
-         */
         return [
             'age_in_months' =>
                 $ageInMonths,
@@ -573,6 +604,12 @@ class NutritionController extends Controller
             'height' =>
                 $height,
 
+            'measurement_method' =>
+                $measurementMethod,
+
+            'height_for_assessment' =>
+                $heightForAssessment,
+
             'bmi' =>
                 $bmi,
 
@@ -582,10 +619,6 @@ class NutritionController extends Controller
             'recommendation' =>
                 $recommendation,
 
-            /*
-             * PENTING:
-             * Sekarang selalu ada 4 key.
-             */
             'statuses' =>
                 $statuses,
 
@@ -633,9 +666,53 @@ class NutritionController extends Controller
         ];
     }
 
-    /**
-     * Mencari Height Age berdasarkan tinggi anak.
-     */
+    private function adjustHeight(
+        float $height,
+        int $ageInMonths,
+        string $measurementMethod
+    ): float {
+        $measurementMethod =
+            strtolower(
+                trim($measurementMethod)
+            );
+
+        /*
+         * Anak 0-24 bulan:
+         * standar menggunakan panjang badan
+         * dalam posisi terlentang.
+         */
+        if ($ageInMonths <= 24) {
+            if ($measurementMethod === 'standing') {
+                return round(
+                    $height + 0.7,
+                    2
+                );
+            }
+
+            return round(
+                $height,
+                2
+            );
+        }
+
+        /*
+         * Anak di atas 24 bulan:
+         * standar menggunakan tinggi badan
+         * dalam posisi berdiri.
+         */
+        if ($measurementMethod === 'recumbent') {
+            return round(
+                $height - 0.7,
+                2
+            );
+        }
+
+        return round(
+            $height,
+            2
+        );
+    }
+
     private function findHeightAge(
         string $gender,
         float $height
@@ -648,6 +725,17 @@ class NutritionController extends Controller
             ->whereNotNull('median')
             ->orderBy('age_month')
             ->get();
+
+        if ($standards->isEmpty()) {
+            $standards = GrowthStandard::where(
+                'index_type',
+                'lfa'
+            )
+                ->where('gender', $gender)
+                ->whereNotNull('median')
+                ->orderBy('age_month')
+                ->get();
+        }
 
         if ($standards->isEmpty()) {
             return null;
@@ -684,9 +772,6 @@ class NutritionController extends Controller
         return (int) $closest->age_month;
     }
 
-    /**
-     * Menentukan energi per kg.
-     */
     private function getEnergyPerKg(
         int $ageInMonths,
         string $gender
@@ -726,9 +811,6 @@ class NutritionController extends Controller
         return null;
     }
 
-    /**
-     * Menghitung BMI.
-     */
     private function calculateBmi(
         float $weight,
         float $height
@@ -742,14 +824,11 @@ class NutritionController extends Controller
 
         return round(
             $weight /
-            ($heightMeter * $heightMeter),
+                ($heightMeter * $heightMeter),
             2
         );
     }
 
-    /**
-     * Menormalisasi gender.
-     */
     private function normalizeGender(
         ?string $gender
     ): string {
@@ -778,9 +857,6 @@ class NutritionController extends Controller
         return 'female';
     }
 
-    /**
-     * Format umur.
-     */
     private function formatAge(
         int $years,
         int $months
@@ -791,51 +867,124 @@ class NutritionController extends Controller
             ' bulan';
     }
 
-    /**
-     * Menghitung Z-score pendekatan sederhana.
-     */
     private function calculateZScore(
         float $value,
-        $median,
         GrowthStandard $standard
     ): float {
-        $median =
-            (float) $median;
+        $points = [
+            -3 => (float) $standard->sd_minus_3,
+            -2 => (float) $standard->sd_minus_2,
+            -1 => (float) $standard->sd_minus_1,
+             0 => (float) $standard->median,
+             1 => (float) $standard->sd_plus_1,
+             2 => (float) $standard->sd_plus_2,
+             3 => (float) $standard->sd_plus_3,
+        ];
 
-        $sdMinus1 =
-            (float) $standard->sd_minus_1;
+        /*
+         * Pastikan data standar lengkap.
+         */
+        foreach ($points as $z => $measurement) {
+            if ($measurement <= 0) {
+                unset($points[$z]);
+            }
+        }
 
-        $sdPlus1 =
-            (float) $standard->sd_plus_1;
-
-        $sd =
-            (
-                abs(
-                    $median -
-                    $sdMinus1
-                ) +
-                abs(
-                    $sdPlus1 -
-                    $median
-                )
-            ) / 2;
-
-        if ($sd <= 0) {
+        if (count($points) < 2) {
             return 0;
         }
 
-        return round(
-            (
-                $value -
-                $median
-            ) / $sd,
-            2
-        );
+        $keys = array_keys($points);
+
+        /*
+         * Nilai berada di bawah -3 SD.
+         */
+        if ($value <= $points[$keys[0]]) {
+            $z1 = $keys[0];
+            $z2 = $keys[1];
+
+            return round(
+                $this->interpolateZScore(
+                    $value,
+                    $points[$z1],
+                    $points[$z2],
+                    $z1,
+                    $z2
+                ),
+                2
+            );
+        }
+
+        /*
+         * Nilai berada di atas +3 SD.
+         */
+        $last = count($keys) - 1;
+
+        if ($value >= $points[$keys[$last]]) {
+            $z1 = $keys[$last - 1];
+            $z2 = $keys[$last];
+
+            return round(
+                $this->interpolateZScore(
+                    $value,
+                    $points[$z1],
+                    $points[$z2],
+                    $z1,
+                    $z2
+                ),
+                2
+            );
+        }
+
+        /*
+         * Cari interval SD yang sesuai.
+         */
+        for ($i = 0; $i < count($keys) - 1; $i++) {
+            $z1 = $keys[$i];
+            $z2 = $keys[$i + 1];
+
+            $v1 = $points[$z1];
+            $v2 = $points[$z2];
+
+            if (
+                $value >= $v1 &&
+                $value <= $v2
+            ) {
+                return round(
+                    $this->interpolateZScore(
+                        $value,
+                        $v1,
+                        $v2,
+                        $z1,
+                        $z2
+                    ),
+                    2
+                );
+            }
+        }
+
+        return 0;
     }
 
-    /**
-     * Interpretasi BB/U.
-     */
+    private function interpolateZScore(
+        float $value,
+        float $value1,
+        float $value2,
+        int $z1,
+        int $z2
+    ): float {
+        if ($value2 == $value1) {
+            return (float) $z1;
+        }
+
+        return $z1 +
+            (
+                ($value - $value1) /
+                ($value2 - $value1)
+            ) *
+            ($z2 - $z1);
+    }
+
     private function interpretWeightForAge(
         float $z
     ): string {
@@ -851,12 +1000,9 @@ class NutritionController extends Controller
             return 'Normal';
         }
 
-        return 'Berat badan lebih';
+        return 'Risiko berat badan lebih';
     }
 
-    /**
-     * Interpretasi TB/U.
-     */
     private function interpretHeightForAge(
         float $z
     ): string {
@@ -875,9 +1021,6 @@ class NutritionController extends Controller
         return 'Tinggi';
     }
 
-    /**
-     * Interpretasi BB/TB.
-     */
     private function interpretWeightForHeight(
         float $z
     ): string {
@@ -894,7 +1037,7 @@ class NutritionController extends Controller
         }
 
         if ($z <= 2) {
-            return 'Risiko gizi lebih';
+            return 'Berisiko gizi lebih';
         }
 
         if ($z <= 3) {
@@ -904,22 +1047,19 @@ class NutritionController extends Controller
         return 'Obesitas';
     }
 
-    /**
-     * Interpretasi IMT/U usia sampai 5 tahun.
-     */
     private function interpretBmiUnderFive(
         float $z
     ): string {
         if ($z < -3) {
-            return 'Sangat kurus';
+            return 'Gizi buruk';
         }
 
         if ($z < -2) {
-            return 'Kurus';
+            return 'Gizi kurang';
         }
 
         if ($z <= 1) {
-            return 'Normal';
+            return 'Gizi baik';
         }
 
         if ($z <= 2) {
@@ -933,59 +1073,46 @@ class NutritionController extends Controller
         return 'Obesitas';
     }
 
-    /**
-     * Interpretasi IMT/U usia 5–18 tahun.
-     */
     private function interpretBmiFiveToEighteen(
         float $z
     ): string {
         if ($z < -3) {
-            return 'Sangat kurus';
+            return 'Gizi buruk';
         }
 
         if ($z < -2) {
-            return 'Kurus';
+            return 'Gizi kurang';
         }
 
         if ($z <= 1) {
-            return 'Normal';
+            return 'Gizi baik';
         }
 
         if ($z <= 2) {
-            return 'Gemuk';
+            return 'Gizi lebih';
         }
 
         return 'Obesitas';
     }
 
-    /**
-     * Keterangan food quantitative.
-     */
     private function foodQuantityDescription(
         int $ageInMonths
     ): string {
         if ($ageInMonths <= 6) {
-            return
-                'Seluruh kebutuhan energi berasal dari liquid food/ASI.';
+            return 'Seluruh kebutuhan energi berasal dari liquid food/ASI.';
         }
 
         if ($ageInMonths <= 8) {
-            return
-                'Sekitar 30% kebutuhan energi berasal dari makanan padat dan 70% dari liquid food/ASI.';
+            return 'Sekitar 30% kebutuhan energi berasal dari makanan padat dan 70% dari liquid food/ASI.';
         }
 
         if ($ageInMonths <= 12) {
-            return
-                'Sekitar 50% kebutuhan energi berasal dari makanan padat dan 50% dari liquid food/ASI.';
+            return 'Sekitar 50% kebutuhan energi berasal dari makanan padat dan 50% dari liquid food/ASI.';
         }
 
-        return
-            'Sekitar 70% kebutuhan energi berasal dari makanan padat dan 30% dari liquid food/ASI.';
+        return 'Sekitar 70% kebutuhan energi berasal dari makanan padat dan 30% dari liquid food/ASI.';
     }
 
-    /**
-     * Membuat rekomendasi sederhana.
-     */
     private function makeRecommendation(
         string $nutritionStatus,
         int $ageInMonths,
@@ -993,9 +1120,13 @@ class NutritionController extends Controller
         ?float $energyRequirement
     ): string {
         $recommendation =
-            'Perlu pemantauan pola makan, aktivitas fisik, dan pertumbuhan anak.';
+            'Perlu pemantauan pola makan, aktivitas fisik, dan pertumbuhan anak secara berkala.';
 
         if (
+            str_contains(
+                $nutritionStatus,
+                'Gizi buruk'
+            ) ||
             str_contains(
                 $nutritionStatus,
                 'Sangat kurus'
@@ -1004,6 +1135,10 @@ class NutritionController extends Controller
             $recommendation =
                 'Perhatikan kecukupan energi dan zat gizi anak serta lakukan pemantauan pertumbuhan secara berkala.';
         } elseif (
+            str_contains(
+                $nutritionStatus,
+                'Gizi kurang'
+            ) ||
             str_contains(
                 $nutritionStatus,
                 'Kurus'
@@ -1031,6 +1166,10 @@ class NutritionController extends Controller
             str_contains(
                 $nutritionStatus,
                 'Normal'
+            ) ||
+            str_contains(
+                $nutritionStatus,
+                'Gizi baik'
             )
         ) {
             $recommendation =
